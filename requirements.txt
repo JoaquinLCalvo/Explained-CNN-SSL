@@ -1,0 +1,12 @@
+torch>=1.8.1
+torchvision>=0.13.0
+pytorch-lightning>=2.0
+lightning-bolts
+torchmetrics>=1.0
+timm
+matplotlib
+seaborn
+tqdm
+numpy
+wandb
+pre-commit

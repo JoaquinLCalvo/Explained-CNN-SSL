@@ -25,6 +25,7 @@ def train_simclr():
     # Initialize Trainer
     trainer = Trainer(
         max_epochs=Config.simclr_max_epochs,
+        accelerator="gpu",
         devices=1,
         callbacks=[checkpoint_callback, lr_monitor]
     )

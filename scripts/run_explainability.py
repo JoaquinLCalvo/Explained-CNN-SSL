@@ -9,7 +9,7 @@ from data.datasets import get_stl10_datasets
 def run_explainability():
     logger = setup_logger(Config.saved_models_path, log_file="explainability.log")
     logger.info("Loading model...")
-    model = torch.load(f=f'{Config.saved_models_path}simclr-epoch_0.ckpt', weights_only=False)
+    model = torch.load(f=f'{Config.saved_models_path}simclr_model.pth', weights_only=False)
     # model.eval()
     # Select the target class for which you want to explain predictions
     dataset = get_stl10_datasets(Config.data_path)

@@ -1,3 +1,4 @@
+import torch
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from data import get_stl10_datasets
@@ -24,7 +25,6 @@ def train_simclr():
     # Initialize Trainer
     trainer = Trainer(
         max_epochs=Config.simclr_max_epochs,
-        accelerator="gpu",
         devices=1,
         callbacks=[checkpoint_callback, lr_monitor]
     )

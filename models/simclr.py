@@ -39,7 +39,7 @@ class SimCLR(pl.LightningModule):
 
     def info_nce_loss(self, batch):
         imgs, _ = batch
-        imgs = torch.cat(imgs, dim=0)
+        # imgs = torch.cat(imgs, dim=0)
 
         # Encode all images
         feats = self.convnet(imgs)

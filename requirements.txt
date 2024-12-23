@@ -11,3 +11,4 @@ numpy
 wandb
 pre-commit
 captum
+einops

@@ -12,3 +12,4 @@ wandb
 pre-commit
 captum
 einops
+ipywidgets

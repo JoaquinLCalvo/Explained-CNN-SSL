@@ -168,5 +168,6 @@ data/stl10_binary/test_X.bin
 data/stl10_binary/test_y.bin
 data/stl10_binary/train_X.bin
 data/stl10_binary/unlabeled_X.bin
-saved_models/mlp_model.pth
-saved_models/simclr_model.pth
+saved_models/*
+
+wandb/*

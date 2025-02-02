@@ -1,49 +1,69 @@
 import torch
-from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
-from data import get_stl10_datasets
-from models import SimCLR
-from configs.config import Config
+from torch.utils.data import DataLoader
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import LearningRateMonitor
+from models.simclr import SimCLR
+import wandb
 
-def train_simclr():
-    # Prepare datasets
-    unlabeled_data, _ = get_stl10_datasets(Config.data_path)
+## Train SimCLR Model
 
-    # Initialize SimCLR model
-    model = SimCLR()
+def train_simclr(batch_size, unlabeled_data, train_data_contrast, num_workers, lr, weight_decay, temperature, hidden_dim, max_epochs=500):
 
-    # Prepare callbacks
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=Config.saved_models_path,
-        filename="simclr-{epoch:02d}-{train_loss:.2f}",
-        save_top_k=1,
-        monitor="train_loss",
-        mode="min"
+    wandb.init(
+        project="Explained-CNN-SimCLR",
+        config={
+            "name": "simclr",
+            "backbone": "resnet18",
+            "max_epochs": max_epochs,
+            "batch_size": batch_size,
+            "learning_rate": lr,
+            "weight_decay": weight_decay,
+            "temperature": temperature,
+            "hidden_dim": hidden_dim
+        }
     )
-    lr_monitor = LearningRateMonitor(logging_interval="epoch")
 
-    # Initialize Trainer
-    trainer = Trainer(
-        max_epochs=Config.simclr_max_epochs,
-        accelerator="gpu",
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+
+    # Initialize the trainer
+    trainer = pl.Trainer(
+        accelerator="gpu" if str(device).startswith("cuda") else "cpu",
         devices=1,
-        callbacks=[checkpoint_callback, lr_monitor]
+        max_epochs=max_epochs,
+        callbacks=[
+            LearningRateMonitor(logging_interval='epoch')
+        ]
     )
 
-    # Data loader for unlabeled data
-    train_loader = torch.utils.data.DataLoader(
+    trainer.logger._default_hp_metric = None
+
+    # Create data loaders
+    train_loader = DataLoader(
         unlabeled_data,
-        batch_size=256,  # Adapt as needed for T4 GPU
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=Config.num_workers
+        drop_last=True,
+        pin_memory=True,
+        num_workers=num_workers
     )
+    val_loader = DataLoader(
+        train_data_contrast,
+        batch_size=batch_size,
+        shuffle=False,
+        drop_last=False,
+        pin_memory=True,
+        num_workers=num_workers
+    )
+
+    # Seed for reproducibility
+    pl.seed_everything(47)
+
+    # Initialize the SimCLR model
+    model = SimCLR(max_epochs=max_epochs, lr=lr, hidden_dim=hidden_dim, weight_decay=weight_decay, temperature=temperature)
 
     # Train the model
-    trainer.fit(model, train_loader)
+    trainer.fit(model, train_loader, val_loader)
 
-    # Save the trained model
-    trainer.save_checkpoint(f"{Config.saved_models_path}/simclr_final.ckpt")
-    print("SimCLR model training completed and saved.")
+    wandb.finish()
 
-if __name__ == "__main__":
-    train_simclr()
+    return model

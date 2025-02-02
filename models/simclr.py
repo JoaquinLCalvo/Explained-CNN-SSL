@@ -1,78 +1,83 @@
-from configs.config import Config
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 import torch.optim as optim
+import wandb
 
+# SimCLR model definition
 class SimCLR(pl.LightningModule):
-    def __init__(self):
+
+    def __init__(self, hidden_dim, lr, temperature, weight_decay, max_epochs=500):
         super().__init__()
-
-        self.hidden_dim = Config.simclr_hidden_dim
-        self.lr = Config.simclr_lr
-        self.temperature = Config.simclr_temperature
-        self.weight_decay = Config.simclr_weight_decay
-        self.max_epochs = Config.simclr_max_epochs
-
-        # INTERNAL NOTES (TO BE DELETED IN FINAL VERSION)
-        # 1. In the future, try with other backbones (could be Resnet50, could be some EfficientNet)
-        # 2. Since SimCLR learns representations directly from the data, I'm not using the pre-trained weights by now
-        # to avoid the bias learned from ImageNet-like datasets. However, this should also be tested.
-        # Tip: for larger datasets, pretrained=False should work better (because of what I've just exposed)
-        # while for small datasets, the pretrained weights might provide a performance boost
-
-        # Define ResNet18 backbone
-        self.convnet = torch.hub.load('pytorch/vision:v0.10.0', 'resnet18', pretrained=False)
+        self.save_hyperparameters()
+        assert self.hparams.temperature > 0.0, 'The temperature must be a positive float!'
+        # Base model f(.)
+        self.convnet = torchvision.models.resnet18(num_classes=4*hidden_dim)  # Output of last linear layer
+        # The MLP for g(.) consists of Linear->ReLU->Linear
         self.convnet.fc = nn.Sequential(
-            nn.Linear(self.convnet.fc.in_features, 4 * self.hidden_dim),
+            self.convnet.fc,  # Linear(ResNet output, 4*hidden_dim)
             nn.ReLU(inplace=True),
-            nn.Linear(4 * self.hidden_dim, self.hidden_dim),
+            nn.Linear(4*hidden_dim, hidden_dim)
         )
 
     def configure_optimizers(self):
-        optimizer = optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=self.max_epochs, eta_min=self.lr / 50
-        )
-        return [optimizer], [scheduler]
+        optimizer = optim.AdamW(self.parameters(),
+                                lr=self.hparams.lr,
+                                weight_decay=self.hparams.weight_decay)
+        lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer,
+                                                            T_max=self.hparams.max_epochs,
+                                                            eta_min=self.hparams.lr/50)
+        return [optimizer], [lr_scheduler]
 
-    def info_nce_loss(self, batch):
+    def info_nce_loss(self, batch, mode='train'):
         imgs, _ = batch
-        # imgs = torch.cat(imgs, dim=0)
+        imgs = torch.cat(imgs, dim=0)
 
         # Encode all images
         feats = self.convnet(imgs)
-
         # Calculate cosine similarity
-        cos_sim = F.cosine_similarity(feats[:, None, :], feats[None, :, :], dim=-1)
-
+        cos_sim = F.cosine_similarity(feats[:,None,:], feats[None,:,:], dim=-1)
         # Mask out cosine similarity to itself
         self_mask = torch.eye(cos_sim.shape[0], dtype=torch.bool, device=cos_sim.device)
         cos_sim.masked_fill_(self_mask, -9e15)
-
-        # Find positive example (batch_size//2 away from original example)
-        pos_mask = self_mask.roll(shifts=cos_sim.shape[0] // 2, dims=0)
-
-        # Compute InfoNCE loss
-        cos_sim = cos_sim / self.temperature
+        # Find positive example -> batch_size//2 away from the original example
+        pos_mask = self_mask.roll(shifts=cos_sim.shape[0]//2, dims=0)
+        # InfoNCE loss
+        cos_sim = cos_sim / self.hparams.temperature
         nll = -cos_sim[pos_mask] + torch.logsumexp(cos_sim, dim=-1)
         nll = nll.mean()
 
-        # Logging metrics
-        self.log("train_loss", nll, prog_bar=True)
+        # Logging loss
+        self.log(mode+'_loss', nll)
+        wandb.log({f"{mode}_loss": nll.item()})  # wandb logging
 
-        # Ranking metrics
-        comb_sim = torch.cat(
-            [cos_sim[pos_mask][:, None], cos_sim.masked_fill(pos_mask, -9e15)],
-            dim=-1
-        )
+        # Get ranking position of positive example
+        comb_sim = torch.cat([cos_sim[pos_mask][:,None],  # First position positive example
+                              cos_sim.masked_fill(pos_mask, -9e15)],
+                             dim=-1)
         sim_argsort = comb_sim.argsort(dim=-1, descending=True).argmin(dim=-1)
 
-        self.log("train_acc_top1", (sim_argsort == 0).float().mean(), prog_bar=True)
-        self.log("train_acc_top5", (sim_argsort < 5).float().mean(), prog_bar=True)
+        # Calculate accuracy metrics
+        top1_acc = (sim_argsort == 0).float().mean()
+        top5_acc = (sim_argsort < 5).float().mean()
+        mean_pos_acc = 1 + sim_argsort.float().mean()
+
+        # Logging ranking metrics
+        self.log(mode + '_acc_top1', top1_acc)
+        self.log(mode + '_acc_top5', top5_acc)
+        self.log(mode + '_acc_mean_pos', mean_pos_acc)
+
+        wandb.log({
+            f"{mode}_acc_top1": top1_acc.item(),
+            f"{mode}_acc_top5": top5_acc.item(),
+            f"{mode}_acc_mean_pos": mean_pos_acc.item()
+        })
 
         return nll
 
     def training_step(self, batch, batch_idx):
-        return self.info_nce_loss(batch)
+        return self.info_nce_loss(batch, mode='train')
+
+    def validation_step(self, batch, batch_idx):
+        self.info_nce_loss(batch, mode='val')
